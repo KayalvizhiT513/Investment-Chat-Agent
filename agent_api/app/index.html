@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics Chat Agent</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Poppins', 'Inter', sans-serif;
+            font-size: 15px;
+            font-weight: 500;
+            line-height: 1.5;
+            background: linear-gradient(135deg, #f9f9ff, #f3e7ff);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            position: relative;
+        }
+        body::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M10 80 Q 50 10 90 80 T 170 80" stroke="%23a5d6a7" stroke-width="2" fill="none"/><path d="M10 60 Q 50 30 90 60 T 170 60" stroke="%23f48fb1" stroke-width="2" fill="none"/><path d="M10 40 Q 50 50 90 40 T 170 40" stroke="%23bbdefb" stroke-width="2" fill="none"/></svg>');
+            background-size: 200px 200px;
+            opacity: 0.1;
+            pointer-events: none;
+        }
+        .chat-container {
+            width: 90%;
+            max-width: 600px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            height: 80vh;
+            position: relative;
+            z-index: 1;
+            padding: 24px;
+            margin: 20px;
+        }
+        .chat-header {
+            background: linear-gradient(135deg, #ff69b4, #2dd4bf);
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            font-family: 'Poppins', sans-serif;
+            margin-bottom: 16px;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+            background: transparent;
+            scroll-behavior: smooth;
+        }
+        .message {
+            margin: 10px 0 14px 0;
+            padding: 16px 18px;
+            border-radius: 18px;
+            max-width: 75%;
+            position: relative;
+            animation: fadeInUp 0.3s ease-out;
+            line-height: 1.5;
+        }
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .message.user {
+            background: linear-gradient(135deg, #6ec1e4, #2dd4bf);
+            color: #ffffff;
+            align-self: flex-end;
+            margin-left: auto;
+            border-bottom-right-radius: 0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+        .message.user::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: -8px;
+            width: 0;
+            height: 0;
+            border: 8px solid transparent;
+            border-left-color: #2dd4bf;
+            border-bottom: none;
+            border-right: none;
+        }
+        .message.assistant {
+            background: linear-gradient(135deg, #fda4af, #f9a8d4);
+            color: #333333;
+            border-bottom-left-radius: 0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
+        .message.assistant::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: -8px;
+            width: 0;
+            height: 0;
+            border: 8px solid transparent;
+            border-right-color: #f9a8d4;
+            border-bottom: none;
+            border-left: none;
+        }
+        .message.thinking::after {
+            content: '';
+            animation: dots 1.5s infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: ''; }
+            40% { content: '.'; }
+            60% { content: '..'; }
+            80%, 100% { content: '...'; }
+        }
+        .chat-input {
+            display: flex;
+            padding: 16px;
+            background: #ffffff;
+            border-radius: 24px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            margin-top: 16px;
+        }
+        .chat-input input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #e5e7eb;
+            border-radius: 20px;
+            margin-right: 12px;
+            font-family: inherit;
+            font-size: 15px;
+            outline: none;
+        }
+        .chat-input input:focus {
+            border-color: #6ec1e4;
+        }
+        .chat-input button {
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #f472b6, #14b8a6);
+            color: white;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .chat-input button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(244, 114, 182, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">💬 Analytics Chat Agent</div>
+        <div class="chat-messages" id="chat-messages">
+            <div class="message assistant">Hello! I'm here to help you calculate investment analytics. What would you like to compute?</div>
+        </div>
+        <div class="chat-input">
+            <input type="text" id="message-input" placeholder="Type your message..." onkeypress="handleKeyPress(event)">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const chatMessages = document.getElementById('chat-messages');
+        const messageInput = document.getElementById('message-input');
+        let conversationHistory = [];
+
+        function parseContent(content) {
+            // Check for missing parameters
+            const missingMatch = content.match(/^Missing parameters: (.+)$/);
+            if (missingMatch) {
+                const params = missingMatch[1].split(',').map(p => p.trim().replace(/_/g, ' ').split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' '));
+                return `Missing parameters: <ul>${params.map(p => `<li>${p}</li>`).join('')}</ul>`;
+            }
+            // Check for suggestions starting with "Did you mean"
+            const suggestMatch = content.match(/^Did you mean: (.+)$/);
+            if (suggestMatch) {
+                const options = suggestMatch[1].split(',').map(o => o.trim());
+                return `Did you mean: <ul>${options.map(o => `<li onclick="setInput('${o.replace(/'/g, "\\'")}')">${o}</li>`).join('')}</ul>`;
+            }
+            // Handle computed analytics results
+if (content.includes('Computed analytics')) {
+    const jsonMatch = content.match(/\{.*\}/);
+    if (jsonMatch) {
+        try {
+            const data = JSON.parse(jsonMatch[0]);
+            const results = data.results;
+            if (results.sharpe_ratio !== undefined) {
+                return `Sharpe ratio is ${results.sharpe_ratio.toFixed(6)}`;
+            }
+            if (results.volatility !== undefined) {
+                return `Volatility is ${results.volatility.toFixed(9)}`;
+            }
+        } catch (e) {}
+    }
+}
+return content.replace(/\n/g, '<br>');
+        }
+
+        function setInput(value) {
+            messageInput.value = value;
+            sendMessage();
+        }
+
+        function addMessage(content, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            messageDiv.innerHTML = parseContent(content);
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            addMessage(message, 'user');
+            conversationHistory.push({ role: 'user', content: message });
+            messageInput.value = '';
+
+            // Add thinking indicator
+            const thinkingDiv = document.createElement('div');
+            thinkingDiv.className = 'message assistant thinking';
+            thinkingDiv.textContent = 'Thinking';
+            chatMessages.appendChild(thinkingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        conversation_history: conversationHistory
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+
+                const data = await response.json();
+                // Remove thinking indicator
+                const thinking = document.querySelector('.thinking');
+                if (thinking) thinking.remove();
+                addMessage(data.response, 'assistant');
+
+                if (data.reset_history) {
+                    // Clear local conversation history
+                    conversationHistory = [];
+                    console.log("Conversation history reset by backend.");
+                } else {
+                    conversationHistory.push({ role: 'assistant', content: data.response });
+                }
+
+            } catch (error) {
+                // Remove thinking indicator
+                const thinking = document.querySelector('.thinking');
+                if (thinking) thinking.remove();
+                addMessage('Sorry, there was an error processing your request.', 'assistant');
+                console.error('Error:', error);
+            }
+        }
+    </script>
+</body>
+</html>
