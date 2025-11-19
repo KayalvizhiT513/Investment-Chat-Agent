@@ -22,10 +22,17 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATA_API_URL = os.getenv("DATA_API_URL")
 ANALYTICS_API_URL = "http://localhost:8002/analytics"  # Assuming analytics_api runs on 8002
 
-if not all([SUPABASE_URL, SUPABASE_KEY, OPENAI_API_KEY]):
-    raise ValueError("Missing environment variables")
+if not OPENAI_API_KEY:
+    raise ValueError("Missing environment variables: OPENAI_API_KEY is required for the agent to run.")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as exc:
+        print(f"Warning: could not initialize Supabase client. Falling back to local sample data. {exc}")
+else:
+    print("Supabase credentials not configured. Using local sample data for portfolios/benchmarks.")
 
 app = FastAPI(title="Conversational Analytics Agent", version="1.0.0")
 
@@ -48,13 +55,40 @@ METRICS_REQUIREMENTS = {
     "information_ratio": ["portfolio_name", "benchmark_name", "start_date", "end_date"]
 }
 
+FALLBACK_PORTFOLIOS = [
+    "Growth Plus",
+    "Global Dividend",
+    "Secure Income",
+    "Global Macro Opportunities"
+]
+
+FALLBACK_BENCHMARKS = [
+    "Secure Income Benchmark",
+    "MSCI World",
+    "S&P 500"
+]
+
 def get_portfolios():
-    data = supabase.table("portfolios").select("portfolio_name").execute()
-    return [row["portfolio_name"] for row in data.data]
+    if not supabase:
+        return FALLBACK_PORTFOLIOS
+    try:
+        data = supabase.table("portfolios").select("portfolio_name").execute()
+        names = [row["portfolio_name"] for row in data.data]
+        return names or FALLBACK_PORTFOLIOS
+    except Exception as exc:
+        print(f"Warning: unable to fetch portfolios from Supabase. Using fallback list. {exc}")
+        return FALLBACK_PORTFOLIOS
 
 def get_benchmarks():
-    data = supabase.table("benchmarks").select("benchmark_name").execute()
-    return [row["benchmark_name"] for row in data.data]
+    if not supabase:
+        return FALLBACK_BENCHMARKS
+    try:
+        data = supabase.table("benchmarks").select("benchmark_name").execute()
+        names = [row["benchmark_name"] for row in data.data]
+        return names or FALLBACK_BENCHMARKS
+    except Exception as exc:
+        print(f"Warning: unable to fetch benchmarks from Supabase. Using fallback list. {exc}")
+        return FALLBACK_BENCHMARKS
 
 def fuzzy_match(name: str, options: List[str], cutoff=0.6):
     matches = difflib.get_close_matches(name, options, n=5, cutoff=cutoff)
