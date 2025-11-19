@@ -20,7 +20,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATA_API_URL = os.getenv("DATA_API_URL")
-ANALYTICS_API_URL = "http://localhost:8002/analytics"  # Assuming analytics_api runs on 8002
+ANALYTICS_API_URL = os.getenv("ANALYTICS_API_URL")  # Assuming analytics_api runs on 8002
 
 if not OPENAI_API_KEY:
     raise ValueError("Missing environment variables: OPENAI_API_KEY is required for the agent to run.")
