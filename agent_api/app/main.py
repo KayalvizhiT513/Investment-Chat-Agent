@@ -13,14 +13,14 @@ from datetime import datetime, timedelta
 import requests
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Configurations
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-DATA_API_URL = os.getenv("DATA_API_URL")
-ANALYTICS_API_URL = os.getenv("ANALYTICS_API_URL")  # Assuming analytics_api runs on 8002
+DATA_API_URL = os.getenv("DATA_API_URL", "http://localhost:8001")
+ANALYTICS_API_URL = os.getenv("ANALYTICS_API_URL", "http://localhost:8002/analytics")
 
 if not OPENAI_API_KEY:
     raise ValueError("Missing environment variables: OPENAI_API_KEY is required for the agent to run.")
@@ -126,7 +126,7 @@ Conversation history:
 Current user message: {message}
 """
     system_prompt = "You are a helpful assistant that extracts structured parameters from user requests."
-    OPENAI_MODEL = "gpt-5"
+    OPENAI_MODEL = "gpt-3.5-turbo"
     try:
         client = OpenAI(
             api_key=OPENAI_API_KEY,
@@ -137,19 +137,28 @@ Current user message: {message}
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        # Log the request payload
+        print("LLM Request Payload:", messages)
+
         chat_completion = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages
         )
+
+        # Log the raw response
+        print("LLM Raw Response:", chat_completion)
+
         content = chat_completion.choices[0].message.content
         parsed = json.loads(content)
         return parsed
     except Exception as e:
         print(f"Error parsing with LLM: {str(e)}")
+        import traceback
+        print("Traceback:", traceback.format_exc())
         return {}
 
 def check_completeness(params: Dict):
-    metrics = params.get("metrics", [])
+    metrics = params.get("metrics") or []
     print("Checking completeness for metrics:", metrics)
     missing = []
     for metric in metrics:
@@ -210,69 +219,113 @@ def generate_response(params: Dict, missing: List[str], portfolios: List[str], b
             resp = requests.get(ANALYTICS_API_URL, params=query_params)
             if resp.status_code == 200:
                 results = resp.json()
-                response = f"Computed analytics for {params['portfolio_name']}: {results}"
-                return response, results, True
+                if results and "results" in results:
+                    # Convert all key-value pairs into readable phrases
+                    formatted_metrics = []
+                    for key, value in results["results"].items():
+                        if isinstance(value, (int, float)):
+                            formatted_metrics.append(f"{key.replace('_', ' ').capitalize()} is {value:.6f}")
+                        else:
+                            formatted_metrics.append(f"{key.replace('_', ' ').capitalize()} is {value}")
+
+                    # Join multiple metrics if needed
+                    response_text = f"Computed analytics for {results.get('portfolio', 'the portfolio')}: " + "; ".join(formatted_metrics)
+                else:
+                    response_text = response
+                return response_text, results, True
             else:
                 return f"Error computing analytics: {resp.text}", None, False
         except Exception as e:
             return f"Error: {str(e)}", None, False
 
+def interpret_casual_dates(message: str):
+    """Interpret casual date references like 'past two months' or 'past two years' into structured dates."""
+    today = datetime.today()
+    if "past two months" in message.lower():
+        start_date = (today.replace(day=1) - timedelta(days=1)).replace(day=1)  # First day of two months ago
+        end_date = today.replace(day=1) - timedelta(days=1)  # Last day of last month
+        return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+    elif "past two years" in message.lower():
+        start_date = today.replace(year=today.year - 2, month=1, day=1)  # First day of two years ago
+        end_date = today.replace(year=today.year - 1, month=12, day=31)  # Last day of last year
+        return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+    return None, None
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
-    portfolios = get_portfolios()
-    benchmarks = get_benchmarks()
+    try:
+        # Log the incoming request
+        print("Incoming request:", request.dict())
 
-    # Parse parameters
-    print("Message:", request.message, "History:", request.conversation_history)
-    params = parse_with_llm(request.message, request.conversation_history)
-    print("Parsed parameters:", params)
+        portfolios = get_portfolios()
+        benchmarks = get_benchmarks()
 
-    # Check completeness
-    missing = check_completeness(params)
-    print("Missing parameters:", missing)
+        # Interpret casual date references
+        start_date, end_date = interpret_casual_dates(request.message)
 
-    # Check missing portfolios/benchmarks
-    if params.get("portfolio_name"):
-        if params["portfolio_name"] not in portfolios:
-            suggestions = fuzzy_match(params["portfolio_name"], portfolios)
-            missing.append("portfolio_name")
-    if params.get("benchmark_name"):
-        if params["benchmark_name"] not in benchmarks:
-            suggestions = fuzzy_match(params["benchmark_name"], benchmarks)
-            missing.append("benchmark_name")
-    if params.get("risk_free_portfolio_name"):
-        if params["risk_free_portfolio_name"] not in portfolios:
-            suggestions = fuzzy_match(params["risk_free_portfolio_name"], portfolios)
-            missing.append("risk_free_portfolio_name")
+        # Parse parameters
+        print("Message:", request.message, "History:", request.conversation_history)
+        params = parse_with_llm(request.message, request.conversation_history)
+        if start_date and end_date:
+            params["start_date"] = start_date
+            params["end_date"] = end_date
+        print("Parsed parameters:", params)
 
-    # Generate response
-    response, results, reset_history = generate_response(params, missing, portfolios, benchmarks)
-    if reset_history:
-        request.conversation_history = []
-        request.message = None
-        reset_history = False
+        # Check completeness
+        missing = check_completeness(params)
+        print("Missing parameters:", missing)
 
-    print("Final response:", response, "results:", results)
-    if results:
-        # Convert all key-value pairs into readable phrases
-        formatted_metrics = []
-        for key, value in results["results"].items():
-            if isinstance(value, (int, float)):
-                formatted_metrics.append(f"{key.replace('_', ' ').capitalize()} is {value:.6f}")
-            else:
-                formatted_metrics.append(f"{key.replace('_', ' ').capitalize()} is {value}")
-        
-        # Join multiple metrics if needed
-        response_text = "; ".join(formatted_metrics)
-    else:
-        response_text = response
+        # Check missing portfolios/benchmarks
+        if params.get("portfolio_name"):
+            if params["portfolio_name"] not in portfolios:
+                suggestions = fuzzy_match(params["portfolio_name"], portfolios)
+                missing.append("portfolio_name")
+        if params.get("benchmark_name"):
+            if params["benchmark_name"] not in benchmarks:
+                suggestions = fuzzy_match(params["benchmark_name"], benchmarks)
+                missing.append("benchmark_name")
+        if params.get("risk_free_portfolio_name"):
+            if params["risk_free_portfolio_name"] not in portfolios:
+                suggestions = fuzzy_match(params["risk_free_portfolio_name"], portfolios)
+                missing.append("risk_free_portfolio_name")
 
-    return ChatResponse(
-        response=response_text,
-        parameters=params if missing else None,
-        results=results,
-        reset_history=reset_history
-    )
+        # Handle special cases
+        if "list" in request.message.lower():
+            response = (
+                f"Available options:\n"
+                f"- Portfolios: {', '.join(portfolios)}\n"
+                f"- Benchmarks: {', '.join(benchmarks)}\n"
+                f"- Metrics: {', '.join(METRICS_REQUIREMENTS.keys())}\n"
+                f"- Example Start Date: {datetime.today().replace(day=1).strftime('%Y-%m-%d')}\n"
+                f"- Example End Date: {(datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')}"
+            )
+            return ChatResponse(response=response, parameters=None, results=None, reset_history=False)
+
+        # Generate response
+        response, results, reset_history = generate_response(params, missing, portfolios, benchmarks)
+        print("Final response:", response, "results:", results)
+        if reset_history:
+            request.conversation_history = []
+            request.message = None
+            reset_history = False
+
+        return ChatResponse(
+            response=response,
+            parameters=params if missing else params,  # Include parameters in the response
+            results=results,
+            reset_history=reset_history
+        )
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print("Error in /chat:", tb)
+        # Return a friendly ChatResponse so the frontend doesn't show its generic error message
+        return ChatResponse(
+            response="Sorry, there was an internal error processing your request. Please try again.",
+            parameters=None,
+            results=None,
+            reset_history=False
+        )
 
 
 @app.get("/")

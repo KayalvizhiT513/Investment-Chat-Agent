@@ -105,11 +105,11 @@ def get_risk_free_rate(risk_free_portfolio_name: str, start_date: str = None, en
 
 # Routes
 
-@app.get("/")
+@app.get("/analytics")
 def root():
     return {"message": "✅ Analytics API is live."}
 
-@app.get("/analytics")
+@app.get("/")
 def compute_analytics(
     portfolio_name: str = Query(None, description="Name of the portfolio"),
     benchmark_name: str = Query(None, description="Name of the benchmark"),

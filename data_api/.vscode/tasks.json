@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Start data_api",
+			"type": "shell",
+			"command": "uvicorn app.main:app --reload --host 0.0.0.0 --port 8001",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
