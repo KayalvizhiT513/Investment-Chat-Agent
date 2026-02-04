@@ -9,7 +9,6 @@ Designed for global leaders in asset management — such as **BlackRock**, **Van
 ## Overview
 
 Traditional **Investment Performance Analytics (IA)** teams are often bottlenecked by day-to-day **business-as-usual (BaU)** operations, making it challenging to respond quickly to ad hoc analytical requests.  
-
 This project introduces a **Conversational AI-driven solution** that serves as a **product-agnostic wrapper** around existing **Analytics Computation Engines**, enabling analysts, portfolio managers, and business users to query analytics in natural language and receive instant, computed insights.
 
 ---
