@@ -46,6 +46,8 @@ class ChatResponse(BaseModel):
     parameters: Optional[Dict] = None
     results: Optional[Dict] = None
     reset_history: bool = False
+    options: Optional[Dict] = None  # clickable options e.g. {"metrics": [...], "portfolios": [...]}
+    missing: Optional[List[str]] = None  # fields still missing, so frontend can grey them out
 
 # Available metrics and required params
 METRICS_REQUIREMENTS = {
@@ -214,6 +216,22 @@ def merge_params(current: Dict, previous: Dict, message: str, portfolios: List[s
     msg = (message or "").strip()
     lower = msg.lower()
 
+    # Handle contextual chip messages: "X as benchmark" / "X as risk free portfolio"
+    rf_match = re.search(r"^(.+?)\s+as\s+(?:the\s+)?risk.free", lower)
+    bench_match = re.search(r"^(.+?)\s+as\s+(?:the\s+)?benchmark", lower)
+    if rf_match:
+        name = rf_match.group(1).strip()
+        for p in portfolios:
+            if p.lower() == name:
+                merged["risk_free_portfolio_name"] = p
+                return merged  # field resolved, no further overrides needed
+    elif bench_match:
+        name = bench_match.group(1).strip()
+        for b in benchmarks:
+            if b.lower() == name:
+                merged["benchmark_name"] = b
+                return merged
+
     # If user replies with just a portfolio/benchmark name, keep prior context and update only that field.
     for p in portfolios:
         if lower == p.lower():
@@ -272,29 +290,58 @@ def _analytics_url_candidates(base_url: str) -> List[str]:
 
 def generate_response(params: Dict, missing: List[str], portfolios: List[str], benchmarks: List[str]):
     if missing:
-        # missing in pascal case
-        missing_pcase = [m.replace("_", " ").title() for m in missing]
-        response = "I need the following information to compute: " + ", ".join(missing_pcase) + ". "
-        if "portfolio_name" in missing and params.get("portfolio_name"):
-            suggestions = fuzzy_match(params["portfolio_name"], portfolios)
-            if suggestions:
-                response += f"Did you mean one of these portfolios: {', '.join(suggestions)}? "
-            else:
-                response += f"Available portfolios: {', '.join(portfolios)}. "
-        if "benchmark_name" in missing and params.get("benchmark_name"):
-            suggestions = fuzzy_match(params["benchmark_name"], benchmarks)
-            if suggestions:
-                response += f"Did you mean one of these benchmarks: {', '.join(suggestions)}? "
-            else:
-                response += f"Available benchmarks: {', '.join(benchmarks)}. "
-        if "risk_free_portfolio_name" in missing and params.get("risk_free_portfolio_name"):
-            suggestions = fuzzy_match(params["risk_free_portfolio_name"], portfolios)
-            if suggestions:
-                response += f"Did you mean one of these risk-free portfolios: {', '.join(suggestions)}? "
-            else:
-                response += f"Available portfolios: {', '.join(portfolios)}. "
-        # Similar for risk_free
-        return response, None, False
+        metrics = params.get("metrics") or []
+        metric_display = " and ".join(m.replace("_", " ") for m in metrics) if metrics else None
+        options: Dict = {}
+        parts = []
+
+        if "metrics" in missing:
+            parts.append("Sure! What would you like to calculate? Pick a metric to get started:")
+            options["metrics"] = list(METRICS_REQUIREMENTS.keys())
+        elif metric_display:
+            parts.append(f"Got it! To calculate {metric_display}, I just need a couple more details.")
+        else:
+            parts.append("Almost there — just a couple more details needed.")
+
+        for m in missing:
+            if m == "portfolio_name":
+                invalid = params.get("portfolio_name")
+                if invalid:
+                    suggestions = fuzzy_match(invalid, portfolios)
+                    if suggestions:
+                        parts.append(f"I couldn't find \"{invalid}\" — did you mean one of these?")
+                        options["portfolios"] = suggestions
+                    else:
+                        parts.append(f"I couldn't find \"{invalid}\". Which portfolio would you like to analyze?")
+                        options["portfolios"] = portfolios
+                    params["portfolio_name"] = None  # clear invalid value
+                else:
+                    parts.append("Which portfolio would you like to analyze?")
+                    options["portfolios"] = portfolios
+            elif m == "benchmark_name":
+                invalid = params.get("benchmark_name")
+                if invalid:
+                    suggestions = fuzzy_match(invalid, benchmarks)
+                    if suggestions:
+                        parts.append(f"I couldn't find benchmark \"{invalid}\" — did you mean one of these?")
+                        options["benchmarks"] = suggestions
+                    else:
+                        parts.append(f"I couldn't find benchmark \"{invalid}\". Which benchmark should I compare against?")
+                        options["benchmarks"] = benchmarks
+                    params["benchmark_name"] = None
+                else:
+                    parts.append("Which benchmark should I compare against?")
+                    options["benchmarks"] = benchmarks
+            elif m == "risk_free_portfolio_name":
+                # Should not happen — risk-free is auto-set; handle gracefully just in case
+                params["risk_free_portfolio_name"] = "US Dollar Risk Free Rate"
+            elif m == "start_date":
+                parts.append("What start date should I use? (e.g. 2023-01-31)")
+            elif m == "end_date":
+                parts.append("What end date should I use? (e.g. 2023-12-31)")
+
+        response = " ".join(parts)
+        return response, None, False, options, missing
     else:
         # Compute
         try:
@@ -327,8 +374,8 @@ def generate_response(params: Dict, missing: List[str], portfolios: List[str], b
                             else:
                                 formatted_metrics.append(f"{key.replace('_', ' ').capitalize()} is {value}")
 
-                        response_text = f"Computed analytics for {results.get('portfolio', 'the portfolio')}: " + "; ".join(formatted_metrics)
-                        return response_text, results, True
+                        response_text = f"Here are the analytics for {results.get('portfolio', 'the portfolio')}: " + "; ".join(formatted_metrics) + "."
+                        return response_text, results, True, None, []
 
                     if isinstance(results, dict) and "message" in results:
                         last_error = f"Analytics endpoint {analytics_url} returned a health response instead of computed metrics."
@@ -337,13 +384,61 @@ def generate_response(params: Dict, missing: List[str], portfolios: List[str], b
                     continue
 
                 if resp.status_code == 429:
-                    return "Error computing analytics: Analytics service is rate-limited (HTTP 429). Please retry shortly or scale the Render instance.", None, False
+                    return "The analytics service is currently rate-limited. Please try again in a moment.", None, False, None, []
 
                 last_error = f"Analytics endpoint {analytics_url} returned HTTP {resp.status_code}: {resp.text}"
 
-            return f"Error computing analytics: {last_error}", None, False
+            return f"Hmm, I ran into a problem fetching the results: {last_error}", None, False, None, []
         except Exception as e:
-            return f"Error: {str(e)}", None, False
+            return f"Something went wrong while computing analytics: {str(e)}", None, False, None, []
+
+CAPABILITIES_TEXT = (
+    "I can help you calculate investment analytics for your portfolios. Here's what I support:\n"
+    "- **Volatility** — measures portfolio risk over a date range\n"
+    "- **Beta** — compares portfolio sensitivity to a benchmark\n"
+    "- **Sharpe Ratio** — risk-adjusted return vs a risk-free portfolio\n"
+    "- **Tracking Error** — deviation from a benchmark\n"
+    "- **Information Ratio** — active return per unit of active risk\n\n"
+    "Just tell me which metric you'd like, the portfolio name, and the date range — and I'll take care of the rest!"
+)
+
+GREETING_KEYWORDS = {"hi", "hello", "hey", "hiya", "howdy", "greetings", "sup", "good morning", "good afternoon", "good evening"}
+
+def is_greeting_or_general(message: str, params: Dict) -> bool:
+    """Return True if the message is a casual greeting or general question with no analytics intent."""
+    msg_lower = message.lower().strip().rstrip("!.,?")
+    # Explicit greetings
+    if msg_lower in GREETING_KEYWORDS:
+        return True
+    # Help / capability queries
+    if any(kw in msg_lower for kw in ("what can you do", "what do you do", "how can you help", "help me", "capabilities", "features")):
+        return True
+    # No analytics params extracted at all
+    has_any_param = any(v for v in params.values() if v is not None and v != "" and v != [])
+    if not has_any_param:
+        words = msg_lower.split()
+        if len(words) <= 4:  # very short message with no params → likely casual
+            return True
+    return False
+
+def generate_conversational_response(message: str, history: List[Dict]) -> str:
+    """Use LLM to generate a friendly, context-aware reply for non-analytics messages."""
+    system_prompt = (
+        "You are a friendly investment analytics assistant. You help users calculate portfolio metrics "
+        "like volatility, beta, sharpe ratio, tracking error, and information ratio. "
+        "When users greet you or ask general questions, respond warmly and briefly. "
+        "Always invite them to ask about portfolio analytics. Keep replies concise — 2-3 sentences max."
+    )
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in (history or []):
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": message})
+        completion = client.chat.completions.create(model="gpt-3.5-turbo", messages=messages)
+        return completion.choices[0].message.content.strip()
+    except Exception:
+        return "Hey there! I'm your investment analytics assistant. Ask me to calculate metrics like volatility, beta, or Sharpe ratio for any portfolio!"
 
 def interpret_casual_dates(message: str):
     """Interpret casual date references like 'past two months' or 'past two years' into structured dates."""
@@ -380,6 +475,11 @@ def chat(request: ChatRequest):
             params["end_date"] = end_date
         print("Parsed parameters:", params)
 
+        # Auto-set the risk-free portfolio — there is only one option
+        RISK_FREE_PORTFOLIO = "US Dollar Risk Free Rate"
+        if "sharpe_ratio" in (params.get("metrics") or []) and not params.get("risk_free_portfolio_name"):
+            params["risk_free_portfolio_name"] = RISK_FREE_PORTFOLIO
+
         # Check completeness
         missing = check_completeness(params)
         print("Missing parameters:", missing)
@@ -398,20 +498,26 @@ def chat(request: ChatRequest):
                 suggestions = fuzzy_match(params["risk_free_portfolio_name"], portfolios)
                 missing.append("risk_free_portfolio_name")
 
-        # Handle special cases
+        # Handle "list" command
         if "list" in request.message.lower():
             response = (
-                f"Available options:\n"
-                f"- Portfolios: {', '.join(portfolios)}\n"
-                f"- Benchmarks: {', '.join(benchmarks)}\n"
-                f"- Metrics: {', '.join(METRICS_REQUIREMENTS.keys())}\n"
-                f"- Example Start Date: {datetime.today().replace(day=1).strftime('%Y-%m-%d')}\n"
-                f"- Example End Date: {(datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')}"
+                f"Here's what I have available:\n"
+                f"- **Portfolios:** {', '.join(portfolios)}\n"
+                f"- **Benchmarks:** {', '.join(benchmarks)}\n"
+                f"- **Metrics:** {', '.join(METRICS_REQUIREMENTS.keys())}\n"
+                f"- **Example date range:** {datetime.today().replace(day=1).strftime('%Y-%m-%d')} to {(datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')}"
             )
+            return ChatResponse(response=response, parameters=None, results=None, reset_history=False,
+                                options={"metrics": list(METRICS_REQUIREMENTS.keys()),
+                                         "portfolios": portfolios, "benchmarks": benchmarks})
+
+        # Handle greetings and general conversation
+        if is_greeting_or_general(request.message, params):
+            response = generate_conversational_response(request.message, request.conversation_history)
             return ChatResponse(response=response, parameters=None, results=None, reset_history=False)
 
         # Generate response
-        response, results, reset_history = generate_response(params, missing, portfolios, benchmarks)
+        response, results, reset_history, options, missing_out = generate_response(params, missing, portfolios, benchmarks)
         print("Final response:", response, "results:", results)
         if reset_history:
             request.conversation_history = []
@@ -420,17 +526,18 @@ def chat(request: ChatRequest):
 
         return ChatResponse(
             response=response,
-            parameters=params if missing else params,  # Include parameters in the response
+            parameters=params,
             results=results,
-            reset_history=reset_history
+            reset_history=reset_history,
+            options=options,
+            missing=missing_out
         )
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
         print("Error in /chat:", tb)
-        # Return a friendly ChatResponse so the frontend doesn't show its generic error message
         return ChatResponse(
-            response="Sorry, there was an internal error processing your request. Please try again.",
+            response="Oops, something went wrong on my end. Please try again!",
             parameters=None,
             results=None,
             reset_history=False

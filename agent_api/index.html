@@ -210,6 +210,45 @@
             padding-left: 18px;
         }
         
+        .options-section {
+            margin-top: 12px;
+        }
+
+        .options-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #856404;
+            margin-bottom: 6px;
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .chip {
+            padding: 5px 14px;
+            background: #fff8e1;
+            border: 1px solid #ffc107;
+            border-radius: 20px;
+            color: #795548;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.18s;
+            font-family: inherit;
+        }
+
+        .chip:hover {
+            background: #ffc107;
+            color: #fff;
+            transform: translateY(-1px);
+            box-shadow: 0 3px 8px rgba(255, 193, 7, 0.35);
+        }
+
         ::-webkit-scrollbar {
             width: 8px;
         }
@@ -277,33 +316,61 @@
             return div.innerHTML;
         }
 
-        function parseContent(content, parameters) {
+        function formatParamKey(key) {
+            return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        }
+
+        function renderChips(label, items, optionKey) {
+            if (!items || items.length === 0) return '';
+            let html = '<div class="options-section">';
+            html += `<div class="options-label">${escapeHTML(label)}</div>`;
+            html += '<div class="chips">';
+            for (const item of items) {
+                const display = optionKey === 'metrics'
+                    ? item.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+                    : item;
+                html += `<button class="chip" data-value="${escapeHTML(item)}" data-field="${escapeHTML(optionKey)}" onclick="selectOption(this.getAttribute('data-value'), this.getAttribute('data-field'))">${escapeHTML(display)}</button>`;
+            }
+            html += '</div></div>';
+            return html;
+        }
+
+        function parseContent(content, parameters, options, missing) {
             let html = "";
 
-            // Handle missing parameters
-            if (content.includes("I need the following information")) {
-                const parts = content.split(".");
+            // If options are present it's a clarification/missing-info message
+            if (options && Object.keys(options).length > 0) {
                 html += '<div class="callout warning">';
-                html += '<div class="callout-title">Missing Information</div>';
-                html += '<p>' + escapeHTML(parts[0]) + '</p>';
-                if (parts.length > 1) {
-                    html += '<p style="margin-top: 8px;">' + escapeHTML(parts.slice(1).join(".")) + '</p>';
-                }
+                html += '<div class="callout-title">One moment...</div>';
+                html += '<p>' + escapeHTML(content) + '</p>';
+                if (options.metrics)              html += renderChips('Choose a metric', options.metrics, 'metrics');
+                if (options.portfolios)           html += renderChips('Available portfolios', options.portfolios, 'portfolios');
+                if (options.benchmarks)           html += renderChips('Available benchmarks', options.benchmarks, 'benchmarks');
+                if (options.risk_free_portfolios) html += renderChips('Risk-free portfolio', options.risk_free_portfolios, 'risk_free');
                 html += '</div>';
             } else {
-                // Regular content
-                html += escapeHTML(content).replace(/\n/g, '<br>');
+                // Regular content — support **bold** markdown
+                html += escapeHTML(content)
+                    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\n/g, '<br>');
             }
 
-            // Include parameters if available and not empty
+            // Show confirmed (non-missing) extracted parameters
             if (parameters && Object.keys(parameters).length > 0) {
-                const nonEmptyParams = Object.entries(parameters).filter(([_, value]) => value !== null && value !== "");
-                if (nonEmptyParams.length > 0) {
+                const missingSet = new Set(missing || []);
+                const confirmedParams = Object.entries(parameters).filter(([key, v]) => {
+                    if (missingSet.has(key)) return false;
+                    if (v === null || v === "") return false;
+                    if (Array.isArray(v) && v.length === 0) return false;
+                    return true;
+                });
+                if (confirmedParams.length > 0) {
                     html += '<div class="callout info">';
-                    html += '<div class="callout-title">Extracted Parameters</div>';
+                    html += '<div class="callout-title">Confirmed Parameters</div>';
                     html += '<ul>';
-                    for (const [key, value] of nonEmptyParams) {
-                        html += `<li><strong>${escapeHTML(key)}:</strong> ${escapeHTML(value)}</li>`;
+                    for (const [key, value] of confirmedParams) {
+                        const display = Array.isArray(value) ? value.join(', ') : value;
+                        html += `<li><strong>${escapeHTML(formatParamKey(key))}:</strong> ${escapeHTML(String(display))}</li>`;
                     }
                     html += '</ul>';
                     html += '</div>';
@@ -313,12 +380,21 @@
             return html;
         }
 
-        function addMessage(content, sender, parameters = null) {
+        function addMessage(content, sender, parameters = null, options = null, missing = null) {
             const messageDiv = document.createElement("div");
             messageDiv.className = "message " + sender;
-            messageDiv.innerHTML = parseContent(content, parameters);
+            messageDiv.innerHTML = parseContent(content, parameters, options, missing);
             chatMessages.appendChild(messageDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Send contextual message when a chip is clicked so the backend knows which field it fills
+        function selectOption(value, field) {
+            let message = value;
+            if (field === 'benchmarks')  message = `${value} as benchmark`;
+            if (field === 'risk_free')   message = `${value} as risk free portfolio`;
+            messageInput.value = message;
+            sendMessage();
         }
 
         function handleKeyPress(event) {
@@ -361,12 +437,22 @@
                 }
 
                 const data = await response.json();
-                addMessage(data.response, "assistant", data.parameters);
+                addMessage(data.response, "assistant", data.parameters, data.options, data.missing);
 
                 if (data.reset_history) {
                     conversationHistory = [];
                 } else {
-                    conversationHistory.push({ role: "assistant", content: data.response });
+                    // Include only confirmed (non-missing) parameters in history so the bot remembers them
+                    let historyContent = data.response;
+                    if (data.parameters) {
+                        const missingSet = new Set(data.missing || []);
+                        const paramLines = Object.entries(data.parameters)
+                            .filter(([k, v]) => !missingSet.has(k) && v !== null && v !== "" && !(Array.isArray(v) && v.length === 0))
+                            .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
+                            .join("\n");
+                        if (paramLines) historyContent += "\nExtracted Parameters:\n" + paramLines;
+                    }
+                    conversationHistory.push({ role: "assistant", content: historyContent });
                 }
             } catch (error) {
                 const thinking = chatMessages.querySelector(".message.thinking");
