@@ -547,3 +547,38 @@ def chat(request: ChatRequest):
 @app.get("/")
 def root():
     return FileResponse(Path(__file__).parent.parent / "index.html")
+
+@app.get("/data")
+def data_viewer():
+    return FileResponse(Path(__file__).parent.parent / "data_viewer.html")
+
+# ── Data API proxy routes (avoids CORS issues in the browser) ──
+@app.get("/api/portfolios")
+def proxy_portfolios():
+    resp = requests.get(f"{DATA_API_URL}/portfolios", timeout=10)
+    return resp.json()
+
+@app.get("/api/benchmarks")
+def proxy_benchmarks():
+    resp = requests.get(f"{DATA_API_URL}/benchmarks", timeout=10)
+    return resp.json()
+
+@app.get("/api/portfolio-returns")
+def proxy_portfolio_returns(portfolio_id: int, start_date: str = None, end_date: str = None):
+    params = {"portfolio_id": portfolio_id}
+    if start_date:
+        params["start_date"] = start_date
+    if end_date:
+        params["end_date"] = end_date
+    resp = requests.get(f"{DATA_API_URL}/portfolio-returns", params=params, timeout=10)
+    return resp.json()
+
+@app.get("/api/benchmark-returns")
+def proxy_benchmark_returns(benchmark_id: int, start_date: str = None, end_date: str = None):
+    params = {"benchmark_id": benchmark_id}
+    if start_date:
+        params["start_date"] = start_date
+    if end_date:
+        params["end_date"] = end_date
+    resp = requests.get(f"{DATA_API_URL}/benchmark-returns", params=params, timeout=10)
+    return resp.json()
