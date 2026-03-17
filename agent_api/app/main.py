@@ -173,6 +173,27 @@ def check_completeness(params: Dict):
         missing.append("metrics")
     return missing
 
+def _analytics_url_candidates(base_url: str) -> List[str]:
+    """Return likely analytics URLs, covering both base and /analytics variants."""
+    if not base_url:
+        return []
+
+    cleaned = base_url.rstrip("/")
+    candidates = [base_url]
+
+    if cleaned.endswith("/analytics"):
+        base_candidate = cleaned[: -len("/analytics")] or "/"
+        candidates.append(base_candidate)
+    else:
+        candidates.append(f"{cleaned}/analytics")
+
+    deduped = []
+    for url in candidates:
+        if url and url not in deduped:
+            deduped.append(url)
+    return deduped
+
+
 def generate_response(params: Dict, missing: List[str], portfolios: List[str], benchmarks: List[str]):
     if missing:
         # missing in pascal case
@@ -216,25 +237,35 @@ def generate_response(params: Dict, missing: List[str], portfolios: List[str], b
                 "end_date": params.get("end_date") if params.get("end_date") else None,
                 "metrics": params["metrics"] if params.get("metrics") else None,
             }
-            resp = requests.get(ANALYTICS_API_URL, params=query_params)
-            if resp.status_code == 200:
-                results = resp.json()
-                if results and "results" in results:
-                    # Convert all key-value pairs into readable phrases
-                    formatted_metrics = []
-                    for key, value in results["results"].items():
-                        if isinstance(value, (int, float)):
-                            formatted_metrics.append(f"{key.replace('_', ' ').capitalize()} is {value:.6f}")
-                        else:
-                            formatted_metrics.append(f"{key.replace('_', ' ').capitalize()} is {value}")
 
-                    # Join multiple metrics if needed
-                    response_text = f"Computed analytics for {results.get('portfolio', 'the portfolio')}: " + "; ".join(formatted_metrics)
-                else:
-                    response_text = response
-                return response_text, results, True
-            else:
-                return f"Error computing analytics: {resp.text}", None, False
+            last_error = ""
+            for analytics_url in _analytics_url_candidates(ANALYTICS_API_URL):
+                resp = requests.get(analytics_url, params=query_params, timeout=20)
+                if resp.status_code == 200:
+                    results = resp.json()
+                    if results and "results" in results:
+                        formatted_metrics = []
+                        for key, value in results["results"].items():
+                            if isinstance(value, (int, float)):
+                                formatted_metrics.append(f"{key.replace('_', ' ').capitalize()} is {value:.6f}")
+                            else:
+                                formatted_metrics.append(f"{key.replace('_', ' ').capitalize()} is {value}")
+
+                        response_text = f"Computed analytics for {results.get('portfolio', 'the portfolio')}: " + "; ".join(formatted_metrics)
+                        return response_text, results, True
+
+                    if isinstance(results, dict) and "message" in results:
+                        last_error = f"Analytics endpoint {analytics_url} returned a health response instead of computed metrics."
+                    else:
+                        last_error = f"Analytics endpoint {analytics_url} returned no computed metrics."
+                    continue
+
+                if resp.status_code == 429:
+                    return "Error computing analytics: Analytics service is rate-limited (HTTP 429). Please retry shortly or scale the Render instance.", None, False
+
+                last_error = f"Analytics endpoint {analytics_url} returned HTTP {resp.status_code}: {resp.text}"
+
+            return f"Error computing analytics: {last_error}", None, False
         except Exception as e:
             return f"Error: {str(e)}", None, False
 
