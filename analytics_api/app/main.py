@@ -105,11 +105,11 @@ def get_risk_free_rate(risk_free_portfolio_name: str, start_date: str = None, en
 
 # Routes
 
-@app.get("/analytics")
+@app.get("/")
 def root():
     return {"message": "✅ Analytics API is live."}
 
-@app.get("/")
+@app.get("/analytics")
 def compute_analytics(
     portfolio_name: str = Query(None, description="Name of the portfolio"),
     benchmark_name: str = Query(None, description="Name of the benchmark"),
@@ -142,5 +142,7 @@ def compute_analytics(
                 raise HTTPException(status_code=400, detail=f"Unknown metric: {metric}")
 
         return {"portfolio": portfolio_name, "benchmark": benchmark_name, "results": results}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
