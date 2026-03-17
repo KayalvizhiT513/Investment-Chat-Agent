@@ -216,7 +216,7 @@ def generate_response(params: Dict, missing: List[str], portfolios: List[str], b
                 "end_date": params.get("end_date") if params.get("end_date") else None,
                 "metrics": params["metrics"] if params.get("metrics") else None,
             }
-            resp = requests.get(ANALYTICS_API_URL, params=query_params)
+            resp = requests.get(ANALYTICS_API_URL, params=query_params, timeout=20)
             if resp.status_code == 200:
                 results = resp.json()
                 if results and "results" in results:
@@ -231,10 +231,12 @@ def generate_response(params: Dict, missing: List[str], portfolios: List[str], b
                     # Join multiple metrics if needed
                     response_text = f"Computed analytics for {results.get('portfolio', 'the portfolio')}: " + "; ".join(formatted_metrics)
                 else:
-                    response_text = response
+                    return "Analytics API returned a successful response but no computed metrics. Please check analytics service routing.", results, False
                 return response_text, results, True
             else:
-                return f"Error computing analytics: {resp.text}", None, False
+                if resp.status_code == 429:
+                    return "Error computing analytics: Analytics service is rate-limited (HTTP 429). Please retry shortly or scale the Render instance.", None, False
+                return f"Error computing analytics (HTTP {resp.status_code}): {resp.text}", None, False
         except Exception as e:
             return f"Error: {str(e)}", None, False
 
