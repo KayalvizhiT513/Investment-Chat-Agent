@@ -11,6 +11,7 @@ from openai import OpenAI
 import difflib
 from datetime import datetime, timedelta
 import requests
+import re
 
 # Load environment variables
 load_dotenv(override=True)
@@ -157,6 +158,81 @@ Current user message: {message}
         print("Traceback:", traceback.format_exc())
         return {}
 
+
+
+def _normalize_metric_list(metrics):
+    if isinstance(metrics, list):
+        return metrics
+    if isinstance(metrics, str) and metrics.strip():
+        return [metrics.strip()]
+    return []
+
+
+def extract_params_from_history(history: List[Dict[str, str]]) -> Dict:
+    """Extract last known structured params from prior assistant/user messages."""
+    extracted: Dict = {}
+    date_pattern = re.compile(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})")
+
+    for msg in history or []:
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+
+        # Parse 'key: value' lines from previous 'Extracted Parameters' blocks
+        for line in content.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            if key in {"portfolio_name", "benchmark_name", "risk_free_portfolio_name", "start_date", "end_date"} and value:
+                extracted[key] = value
+            elif key == "metrics" and value:
+                extracted[key] = _normalize_metric_list(value)
+
+        # Parse inline date range like '31-1-2023 to 31-5-2024'
+        matches = date_pattern.findall(content)
+        if len(matches) >= 2:
+            d1, d2 = matches[0], matches[1]
+            extracted["start_date"] = f"{int(d1[2]):04d}-{int(d1[1]):02d}-{int(d1[0]):02d}"
+            extracted["end_date"] = f"{int(d2[2]):04d}-{int(d2[1]):02d}-{int(d2[0]):02d}"
+
+    if "metrics" in extracted:
+        extracted["metrics"] = _normalize_metric_list(extracted["metrics"])
+    return extracted
+
+
+def merge_params(current: Dict, previous: Dict, message: str, portfolios: List[str], benchmarks: List[str]) -> Dict:
+    merged = dict(previous or {})
+
+    for key, value in (current or {}).items():
+        if value is not None and value != "":
+            merged[key] = value
+
+    merged["metrics"] = _normalize_metric_list(merged.get("metrics"))
+
+    msg = (message or "").strip()
+    lower = msg.lower()
+
+    # If user replies with just a portfolio/benchmark name, keep prior context and update only that field.
+    for p in portfolios:
+        if lower == p.lower():
+            merged["portfolio_name"] = p
+            break
+    for b in benchmarks:
+        if lower == b.lower():
+            merged["benchmark_name"] = b
+            break
+
+    # Parse dates from short follow-up message format dd-mm-yyyy to dd-mm-yyyy
+    range_match = re.search(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*(?:to|-)\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})", lower)
+    if range_match:
+        d1, m1, y1, d2, m2, y2 = range_match.groups()
+        merged["start_date"] = f"{int(y1):04d}-{int(m1):02d}-{int(d1):02d}"
+        merged["end_date"] = f"{int(y2):04d}-{int(m2):02d}-{int(d2):02d}"
+
+    return merged
+
 def check_completeness(params: Dict):
     metrics = params.get("metrics") or []
     print("Checking completeness for metrics:", metrics)
@@ -297,6 +373,8 @@ def chat(request: ChatRequest):
         # Parse parameters
         print("Message:", request.message, "History:", request.conversation_history)
         params = parse_with_llm(request.message, request.conversation_history)
+        history_params = extract_params_from_history(request.conversation_history)
+        params = merge_params(params, history_params, request.message, portfolios, benchmarks)
         if start_date and end_date:
             params["start_date"] = start_date
             params["end_date"] = end_date
