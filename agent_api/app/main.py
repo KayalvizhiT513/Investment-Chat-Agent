@@ -484,18 +484,27 @@ def chat(request: ChatRequest):
         missing = check_completeness(params)
         print("Missing parameters:", missing)
 
-        # Check missing portfolios/benchmarks
+        # Check missing portfolios/benchmarks (case-insensitive lookup)
+        portfolios_lower = {p.lower(): p for p in portfolios}
+        benchmarks_lower = {b.lower(): b for b in benchmarks}
+
         if params.get("portfolio_name"):
-            if params["portfolio_name"] not in portfolios:
-                suggestions = fuzzy_match(params["portfolio_name"], portfolios)
+            canonical = portfolios_lower.get(params["portfolio_name"].lower())
+            if canonical:
+                params["portfolio_name"] = canonical
+            else:
                 missing.append("portfolio_name")
         if params.get("benchmark_name"):
-            if params["benchmark_name"] not in benchmarks:
-                suggestions = fuzzy_match(params["benchmark_name"], benchmarks)
+            canonical = benchmarks_lower.get(params["benchmark_name"].lower())
+            if canonical:
+                params["benchmark_name"] = canonical
+            else:
                 missing.append("benchmark_name")
         if params.get("risk_free_portfolio_name"):
-            if params["risk_free_portfolio_name"] not in portfolios:
-                suggestions = fuzzy_match(params["risk_free_portfolio_name"], portfolios)
+            canonical = portfolios_lower.get(params["risk_free_portfolio_name"].lower())
+            if canonical:
+                params["risk_free_portfolio_name"] = canonical
+            else:
                 missing.append("risk_free_portfolio_name")
 
         # Handle "list" command
